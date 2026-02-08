@@ -44,7 +44,8 @@ module PackwerkSlimTemplate
     def convert
       return empty_result if @slim_content.empty?
 
-      ast = parse_slim(@slim_content)
+      normalized_content = normalize_slim_content(@slim_content)
+      ast = parse_slim(normalized_content)
       extract_ruby_nodes(ast)
 
       ruby_code = @ruby_snippets.map { |s| s[:code] }.join("\n")
@@ -68,6 +69,12 @@ module PackwerkSlimTemplate
       Slim::Parser.new.call(content)
     end
 
+    def normalize_slim_content(content)
+      content.lines.map do |line|
+        line.sub(/^(\s*)#\{/, '\\1| #{')
+      end.join
+    end
+
     def extract_ruby_nodes(node, slim_line = 1, next_node: nil)
       return unless node.is_a?(Array)
 
@@ -85,7 +92,7 @@ module PackwerkSlimTemplate
       case node[1]
       when :output
         # [:slim, :output, escape, code, content]
-        code = node[3]
+        code = sanitize_output_code(node[3])
         nested_nodes = node.length > 4 ? node[4..] : nil
         has_block_content = nested_nodes&.any? { |child| significant_child_node?(child) }
 
@@ -113,6 +120,8 @@ module PackwerkSlimTemplate
             add_ruby_snippet("end", slim_line)
           end
         end
+      when :text
+        extract_text_interpolations(node[3], slim_line)
       end
     end
 
@@ -182,6 +191,93 @@ module PackwerkSlimTemplate
       else
         true
       end
+    end
+
+    def extract_text_interpolations(text_node, slim_line)
+      return unless text_node
+
+      traverse_text_nodes(text_node, slim_line)
+    end
+
+    def traverse_text_nodes(node, slim_line)
+      return unless node.is_a?(Array)
+
+      if node.first == :slim && node[1] == :interpolate
+        extract_interpolation_expressions(node[2]).each do |code|
+          next if code.empty? || comment_code?(code)
+
+          add_ruby_snippet(code, slim_line)
+        end
+      elsif node.first == :multi
+        node[1..].each { |child| traverse_text_nodes(child, slim_line) }
+      else
+        node.each { |child| traverse_text_nodes(child, slim_line) if child.is_a?(Array) }
+      end
+    end
+
+    def sanitize_output_code(code)
+      return code if code.to_s.empty?
+
+      leading_whitespace = code[/\A\s*/] || ""
+      trimmed = code.lstrip
+      sanitized = strip_unbalanced_quote_prefix(trimmed)
+
+      return code if sanitized == trimmed
+
+      "#{leading_whitespace}#{sanitized}"
+    end
+
+    def strip_unbalanced_quote_prefix(code)
+      return code if code.empty?
+
+      quote = code[0]
+      return code unless ["'", '"'].include?(quote)
+
+      remainder = code[1..] || ""
+      return code if remainder.include?(quote)
+
+      remainder.lstrip
+    end
+
+    def extract_interpolation_expressions(raw_code)
+      code = raw_code.to_s
+      return [] unless code.include?('#{')
+
+      expressions = []
+      idx = 0
+
+      while idx < code.length
+        if code[idx, 2] == '#{'
+          idx += 2
+          depth = 1
+          buffer = +''
+
+          while idx < code.length && depth.positive?
+            char = code[idx]
+
+            if char == '{'
+              depth += 1
+              buffer << char
+            elsif char == '}'
+              depth -= 1
+              if depth.zero?
+                expressions << buffer.strip
+                buffer = +''
+              else
+                buffer << char
+              end
+            else
+              buffer << char
+            end
+
+            idx += 1
+          end
+        else
+          idx += 1
+        end
+      end
+
+      expressions
     end
 
     def ensure_block_delimiter(code)
