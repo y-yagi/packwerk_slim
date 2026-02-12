@@ -95,16 +95,25 @@ module PackwerkSlimTemplate
         code = sanitize_output_code(node[3])
         nested_nodes = node.length > 4 ? node[4..] : nil
         has_block_content = nested_nodes&.any? { |child| significant_child_node?(child) }
+        block_delimiter = block_delimiter_for(code)
 
         if code && !code.empty? && !comment_code?(code)
-          code = ensure_block_delimiter(code) if has_block_content
+          if has_block_content && block_delimiter.nil?
+            code = ensure_block_delimiter(code)
+            block_delimiter = block_delimiter_for(code)
+          end
           add_ruby_snippet(code, slim_line)
+        else
+          block_delimiter = nil
         end
 
         # Process nested content if present
         process_sequence(nested_nodes, slim_line + 1) if nested_nodes
 
-        add_ruby_snippet("end", slim_line + (nested_nodes&.length || 0)) if has_block_content
+        if block_delimiter
+          closing_line = slim_line + (nested_nodes&.length || 0)
+          add_ruby_snippet(closing_token_for(block_delimiter), closing_line)
+        end
       when :control
         # [:slim, :control, code, content]
         code = node[2]
@@ -283,14 +292,28 @@ module PackwerkSlimTemplate
     def ensure_block_delimiter(code)
       newline = code.end_with?("\n")
       stripped = code.rstrip
-      detection_target = stripped.sub(/\s+#.*\z/, "")
-
-      return code if detection_target.empty?
-      return code if detection_target.match?(/\{\s*\z/)
-      return code if detection_target.match?(/\bdo(\s*\|.*\|)?\s*\z/)
+      return code if stripped.empty?
+      return code if block_delimiter_for(stripped)
 
       updated = "#{stripped} do"
       newline ? "#{updated}\n" : updated
+    end
+
+    def block_delimiter_for(code)
+      return nil if code.to_s.empty?
+
+      stripped = code.rstrip
+      detection_target = stripped.sub(/\s+#.*\z/, "")
+      return nil if detection_target.empty?
+
+      return :curly if detection_target.match?(/\{\s*\z/)
+      return :do if detection_target.match?(/\bdo(\s*\|.*\|)?\s*\z/)
+
+      nil
+    end
+
+    def closing_token_for(delimiter)
+      delimiter == :curly ? "}" : "end"
     end
   end
 end

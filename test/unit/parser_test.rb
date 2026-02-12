@@ -37,6 +37,21 @@ class ParserTest < Minitest::Test
     assert_kind_of Parser::AST::Node, ast
   end
 
+  def test_call_handles_with_empty_block
+    slim_content = <<~SLIM
+      .modal
+        = form_for(@user) do |f|
+          = f.submit do
+    SLIM
+
+    io = StringIO.new(slim_content)
+    parser = PackwerkSlimTemplate::Parser.new
+
+    ast = parser.call(io: io, file_path: "test.slim")
+
+    assert_kind_of Parser::AST::Node, ast
+  end
+
   def test_call_handles_empty_slim_file
     io = StringIO.new("")
     parser = PackwerkSlimTemplate::Parser.new
